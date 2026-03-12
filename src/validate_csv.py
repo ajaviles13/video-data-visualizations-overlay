@@ -147,8 +147,9 @@ def validate_csv(csv_path: Path, expected_duration: float = None) -> bool:
     print("Your CSV is ready to use!")
     print()
     print("Next steps:")
-    print("  1. Add your video to input/video.mp4")
-    print("  2. Run: python src/overlay_video.py")
+    print("  1. Run: python src/overlay_video.py  (heart rate only)")
+    print("  2. Or: python src/overlay_second_intervals_video_hr_and_temp_data.py  (HR + temperature)")
+    print("  (Generates transparent WebM overlay - no input video needed)")
     print()
     
     return True

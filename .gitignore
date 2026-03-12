@@ -40,6 +40,7 @@ input/*.avi
 output/*.mp4
 output/*.mov
 output/*.avi
+output/*.webm
 
 # Keep example CSV
 !input/heartrate.csv

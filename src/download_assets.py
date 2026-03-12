@@ -220,9 +220,9 @@ def main():
         print(f"   Heart: {heart_path}")
         print()
         print("🚀 Next Steps:")
-        print("   1. Add your video to input/video.mp4")
-        print("   2. Add your CSV to input/heartrate.csv")
-        print("   3. Run: python src/overlay_video.py")
+        print("   1. Add your CSV to input/heartrate.csv")
+        print("   2. Run: python src/overlay_video.py")
+        print("   (Creates transparent 1080x1920 overlay - no input video needed)")
         print()
         return 0
     else:

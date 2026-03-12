@@ -1,27 +1,28 @@
 # 🎬 Video Data Visualizations Overlay
-## Real-Time Heart Rate & Temperature Display for Wellness Videos
+## Transparent Heart Rate & Temperature Overlay for Wellness Videos
 
-A professional Python system for overlaying real-time biometric data on videos. Perfect for **cold plunge**, **sauna**, and **cold shower** sessions recorded with [PlungePalz](https://plungepalz.com) or similar health tracking apps. Features pixel-perfect design specifications with pulsing heart animation synchronized to actual BPM.
+A professional Python system that creates **transparent overlay videos** with biometric data. Perfect for **cold plunge**, **sauna**, and **cold shower** sessions recorded with [PlungePalz](https://plungepalz.com) or similar health tracking apps. Output is a WebM with alpha channel that you can composite over any video in your editor.
 
 ---
 
 ## ✨ Features
 
+- **Transparent Output**: 1080×1920 WebM with alpha channel—composite over any video
+- **No Input Video Required**: Renders overlay onto blank transparent canvas
 - **PlungePalz Integration**: Designed for cold plunge, sauna, and cold shower data
   - Cold Plunge: Heart rate & temperature recorded every 1 second
   - Sauna & Cold Shower: Heart rate & temperature recorded every 5 seconds
-- **Exact Design Match**: Pixel-perfect positioning based on reference dimensions (1261x2242)
+- **Exact Design Match**: Pixel-perfect positioning (1080×1920 portrait)
 - **Pulsing Heart Animation**: Heart icon pulses in sync with actual BPM (±15% size variation)
 - **Professional Typography**: Poppins-Bold font with black stroke outline
-- **Smooth Rendering**: 60fps+ processing with progress tracking
-- **Flexible Input**: Supports any video resolution (auto-scales overlay)
+- **Smooth Rendering**: Progress tracking with configurable FPS
 - **Easy to Use**: Simple command-line interface
 
 ---
 
 ## 📐 Design Specifications
 
-**Reference Dimensions**: 1261 x 2242 pixels (portrait 9:16)
+**Canvas Dimensions**: 1080 × 1920 pixels (portrait 9:16)
 
 ### Heart Icon ❤️
 - **Position**: 21.1% from left, 75.5% from top
@@ -53,13 +54,9 @@ pip install -r requirements.txt
 python src/download_assets.py
 ```
 
-### 2. Prepare Your Files
+### 2. Prepare Your Data
 
-**Add your video**:
-```bash
-# Place your video file in the input directory
-cp /path/to/your/video.mp4 input/video.mp4
-```
+**No input video needed**—the overlay renders onto a transparent 1080×1920 canvas.
 
 **Prepare heart rate CSV**:
 
@@ -102,13 +99,17 @@ Output example:
 ✓ Average: 88 BPM
 ```
 
-### 4. Process Video
+### 4. Generate Transparent Overlay
 
 ```bash
+# Heart rate only
 python src/overlay_video.py
+
+# Heart rate + temperature (dual charts)
+python src/overlay_second_intervals_video_hr_and_temp_data.py
 ```
 
-Your video will be saved to `output/video_with_hr.mp4`
+Output: `output/transparent_overlay.webm` — a WebM with alpha you can layer over any video in your editor.
 
 ---
 
@@ -174,23 +175,26 @@ Validates:
 - ✓ Shows statistics and distribution
 - ✓ Preview of first/last 5 rows
 
-### Process Video
+### Generate Overlay
 
 ```bash
-# Use defaults
+# Heart rate only (defaults)
 python src/overlay_video.py
 
-# Custom input/output
-python src/overlay_video.py \
-  --input input/myvideo.mp4 \
-  --output output/result.mp4 \
-  --csv input/mydata.csv
+# Heart rate + temperature
+python src/overlay_second_intervals_video_hr_and_temp_data.py
+
+# Custom output
+python src/overlay_video.py --output output/my_overlay.webm --csv input/mydata.csv
 ```
 
-**Options**:
-- `--input`, `-i`: Input video file (default: `input/video.mp4`)
-- `--output`, `-o`: Output video file (default: `output/video_with_hr.mp4`)
+**overlay_video.py options**:
+- `--output`, `-o`: Output WebM file (default: `output/transparent_overlay.webm`)
 - `--csv`, `-c`: Heart rate CSV file (default: `input/heartrate.csv`)
+- `--fps`: Frames per second (default: 30)
+- `--width`, `--height`: Canvas size (default: 1080×1920)
+
+**overlay_second_intervals_video_hr_and_temp_data.py** (adds `--hr-csv`, `--temp-csv`)
 
 ---
 
@@ -199,10 +203,10 @@ python src/overlay_video.py \
 ```
 VideoTextOverlay_HeartRateData/
 ├── input/
-│   ├── video.mp4              # Your video file (add this)
-│   └── heartrate.csv          # Your heart rate data (add this)
+│   ├── heartrate.csv          # Your heart rate data (add this)
+│   └── temperature_data.csv   # Temperature data (for dual overlay)
 ├── output/
-│   └── video_with_hr.mp4      # Processed video (generated)
+│   └── transparent_overlay.webm  # Transparent overlay (generated)
 ├── assets/
 │   ├── fonts/
 │   │   └── Poppins-Bold.ttf   # Downloaded by download_assets.py
@@ -210,8 +214,9 @@ VideoTextOverlay_HeartRateData/
 │       └── heart.png          # Created by download_assets.py
 ├── src/
 │   ├── download_assets.py     # Download fonts & create icons
-│   ├── overlay_video.py       # Main processing script
-│   └── validate_csv.py        # CSV validation tool
+│   ├── overlay_video.py       # Heart rate overlay (transparent)
+│   ├── overlay_second_intervals_video_hr_and_temp_data.py  # HR + temp overlay
+│   └── validate_csv.py       # CSV validation tool
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
 └── .gitignore                 # Git ignore rules
@@ -317,14 +322,13 @@ Professional text with stroke outline:
 
 ## 🔧 Troubleshooting
 
-### "Could not open video file"
+### "FFmpeg not found"
 
-**Problem**: Video file not found or corrupted
+**Problem**: FFmpeg is required to encode WebM with alpha
 
 **Solutions**:
-- Ensure video is at `input/video.mp4`
-- Try different video format (MP4, MOV, AVI)
-- Check video is not corrupted
+- macOS: `brew install ffmpeg`
+- Linux: `apt install ffmpeg` or `yum install ffmpeg`
 
 ### "CSV must have 'heart_rate' column"
 
@@ -372,50 +376,24 @@ python src/download_assets.py
 
 ```bash
 # Export your PlungePalz cold plunge data as CSV (1-second intervals)
-# Overlay on your cold plunge video
-python src/overlay_video.py \
-  --input input/cold_plunge.mp4 \
-  --csv input/plunge_session.csv \
-  --output output/cold_plunge_overlay.mp4
+python src/overlay_second_intervals_video_hr_and_temp_data.py \
+  --hr-csv input/plunge_session.csv \
+  --temp-csv input/plunge_temp.csv \
+  --output output/cold_plunge_overlay.webm
+# Then composite the .webm over your cold plunge video in your editor
 ```
 
-### Sauna Session (PlungePalz)
+### Heart Rate Only
 
 ```bash
-# Export your PlungePalz sauna data as CSV (5-second intervals)
-# Note: May need to interpolate to 1-second intervals for smooth animation
-python src/overlay_video.py \
-  --input input/sauna_session.mp4 \
-  --csv input/sauna_data.csv \
-  --output output/sauna_overlay.mp4
+python src/overlay_video.py --csv input/heartrate.csv --output output/hr_overlay.webm
 ```
 
-### Cold Shower Session (PlungePalz)
+### Custom Canvas Size
 
 ```bash
-# Export your PlungePalz cold shower data as CSV (5-second intervals)
-python src/overlay_video.py \
-  --input input/cold_shower.mp4 \
-  --csv input/shower_data.csv \
-  --output output/cold_shower_overlay.mp4
-```
-
-### Portrait Video (9:16 - TikTok/Instagram/Reels)
-
-```bash
-# Perfect for social media - matches reference design
-python src/overlay_video.py \
-  --input input/portrait.mp4 \
-  --output output/portrait_hr.mp4
-```
-
-### Landscape Video (16:9 - YouTube)
-
-```bash
-# Auto-scales to landscape format
-python src/overlay_video.py \
-  --input input/landscape.mp4 \
-  --output output/landscape_hr.mp4
+# Default is 1080×1920; override if needed
+python src/overlay_video.py --width 1080 --height 1920 --output output/overlay.webm
 ```
 
 ---
@@ -423,32 +401,32 @@ python src/overlay_video.py \
 ## 📋 Requirements
 
 - Python 3.8+
+- **FFmpeg** (for WebM encoding with alpha)
 - OpenCV 4.8+
 - NumPy 1.24+
 - Pandas 2.0+
 - Pillow 10.0+
 - tqdm 4.65+
 - requests 2.31+
+- matplotlib, scipy (for chart rendering)
 
-All dependencies installed via:
+All Python dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+FFmpeg: `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux)
 
 ---
 
 ## 🎥 Video Formats
 
-**Supported Input Formats**:
-- MP4 (recommended)
-- MOV
-- AVI
-- Any format supported by OpenCV
+**Input**: None required—overlay renders onto transparent canvas.
 
 **Output Format**:
-- MP4 (H.264 codec)
-- Same resolution as input
-- Same frame rate as input
+- WebM (VP9 codec with alpha channel)
+- Resolution: 1080×1920 (portrait)
+- Transparent background—composite over any video in your editor
+- **Requires FFmpeg** (e.g., `brew install ffmpeg` on macOS)
 
 ---
 
@@ -524,11 +502,12 @@ For issues or questions:
 ## 📸 Example Output
 
 ```
-📹 Video Information:
-   Resolution: 1080x1920
+📹 Transparent Overlay Canvas:
+   Resolution: 1080x1920 (portrait)
    FPS: 30.00
    Total Frames: 6300
    Duration: 210.00s (3.50 min)
+   Output Format: WebM with alpha (VP9)
 
 💓 Heart Rate Data:
    Data points: 210
@@ -541,13 +520,15 @@ For issues or questions:
    Stroke: 9px
 
 🎬 Processing video...
-   Output: output/video_with_hr.mp4
+   Output: output/transparent_overlay.webm
 
 Rendering: 100%|██████████| 6300/6300 [05:15<00:00, 21.54frames/s]
 
+🎬 Encoding transparent WebM video...
+
 ✅ Processing complete!
    Processed 6300 frames
-   Output saved to: output/video_with_hr.mp4
+   Output saved to: output/transparent_overlay.webm
 
 🎉 SUCCESS!
 ```

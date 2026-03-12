@@ -4,6 +4,8 @@ Professional Video Overlay System - Heart Rate Display
 Matches exact Figma/React Native design specifications
 """
 
+import sys
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -12,11 +14,10 @@ from tqdm import tqdm
 import argparse
 import math
 import sys
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-from scipy.interpolate import make_interp_spline
 
 
 def create_text_with_stroke(
@@ -122,17 +123,19 @@ def overlay_image_alpha(
     convert_rgb_to_bgr: bool = False
 ) -> np.ndarray:
     """
-    Overlay RGBA image with transparency onto BGR video frame.
+    Overlay RGBA image with transparency onto BGR/BGRA background.
+    
+    Supports both BGR (3-channel) and BGRA (4-channel) transparent canvases.
     
     Args:
-        background: BGR background image (video frame)
+        background: BGR or BGRA background image
         overlay: RGBA overlay image (text or icon)
         x: X position (left edge)
         y: Y position (top edge)
         convert_rgb_to_bgr: If True, convert RGB channels to BGR (for PIL images)
         
     Returns:
-        Combined BGR image
+        Combined BGR/BGRA image
     """
     if overlay.shape[2] != 4:
         return background
@@ -146,12 +149,6 @@ def overlay_image_alpha(
     
     # Clip to frame boundaries
     if x < 0 or y < 0 or x + w > background.shape[1] or y + h > background.shape[0]:
-        # Adjust overlay if it extends beyond boundaries
-        x_start = max(0, x)
-        y_start = max(0, y)
-        x_end = min(background.shape[1], x + w)
-        y_end = min(background.shape[0], y + h)
-        
         if x < 0 or y < 0:
             overlay = overlay[max(0, -y):, max(0, -x):]
             x = max(0, x)
@@ -166,19 +163,54 @@ def overlay_image_alpha(
             overlay = overlay[:background.shape[0] - y, :]
             h = overlay.shape[0]
     
-    # Extract alpha channel (0-255)
     alpha = overlay[:, :, 3] / 255.0
-    
-    # Get region of interest
     roi = background[y:y+h, x:x+w]
+    num_channels = background.shape[2]
     
-    # Blend each color channel
-    for c in range(3):
-        roi[:, :, c] = (alpha * overlay[:, :, c] + (1 - alpha) * roi[:, :, c])
+    for c in range(num_channels):
+        roi[:, :, c] = (alpha * overlay[:, :, c] + (1 - alpha) * roi[:, :, c]).astype(np.uint8)
     
     background[y:y+h, x:x+w] = roi
     
     return background
+
+
+def encode_transparent_video(
+    frames_dir: Path,
+    output_path: Path,
+    fps: float
+) -> bool:
+    """
+    Encode PNG frame sequence to WebM with alpha (VP9) using ffmpeg.
+    """
+    try:
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ FFmpeg not found. Please install FFmpeg to create transparent video.")
+        print("   Install: brew install ffmpeg  (macOS) or apt install ffmpeg (Linux)")
+        return False
+    
+    input_pattern = str(frames_dir / "frame_%05d.png")
+    cmd = [
+        'ffmpeg', '-y',
+        '-framerate', str(fps),
+        '-i', input_pattern,
+        '-c:v', 'libvpx-vp9',
+        '-pix_fmt', 'yuva420p',
+        '-auto-alt-ref', '0',
+        '-b:v', '2M',
+        str(output_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ FFmpeg encoding failed: {result.stderr}")
+            return False
+        return True
+    except Exception as e:
+        print(f"❌ FFmpeg encoding error: {e}")
+        return False
 
 
 def calculate_pulse_scale(current_time: float, bpm: float) -> float:
@@ -266,6 +298,12 @@ def create_heart_rate_chart(
     ax.set_facecolor('#000000')
     ax.patch.set_alpha(0.7)  # Semi-transparent black
     
+    # Lazy import matplotlib/scipy (slow to load)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from scipy.interpolate import make_interp_spline
+
     # Create smooth curve using spline interpolation
     if len(time_points) > 3:
         # Use spline for smooth curve
@@ -358,51 +396,43 @@ def get_heart_rate_at_time(df: pd.DataFrame, time_seconds: float) -> int:
 
 
 def process_video(
-    input_video: Path,
     output_video: Path,
     heart_rate_df: pd.DataFrame,
     font_path: Path,
-    heart_icon_path: Path
+    heart_icon_path: Path,
+    width: int = 1080,
+    height: int = 1920,
+    fps: float = 30.0,
+    include_chart: bool = True
 ) -> bool:
     """
-    Process video and add heart rate overlay matching exact design specs.
+    Create transparent overlay video with heart rate data.
     
-    Design Specifications (Reference: 1261x2242 pixels):
-    - Heart icon: left=266px (21.1%), top=1692px (75.5%), size=198x198px (15.7%)
-    - Text: left=483px (38.3%), top=1713px (76.4%), size=120px (9.5%)
-    - Font: Poppins-Bold, white with 8-10px black stroke
-    - Animation: ±15% size variation synced to BPM
+    Renders overlays onto a blank transparent canvas (1080x1920) and exports
+    as WebM with alpha channel for compositing over other videos.
     
     Args:
-        input_video: Path to input video file
-        output_video: Path to output video file
+        output_video: Path to output video file (WebM with alpha)
         heart_rate_df: DataFrame with heart rate data
         font_path: Path to Poppins-Bold.ttf
         heart_icon_path: Path to heart.png
+        width: Canvas width in pixels (default: 1080)
+        height: Canvas height in pixels (default: 1920)
+        fps: Frames per second (default: 30)
         
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Open video
-        cap = cv2.VideoCapture(str(input_video))
+        duration = len(heart_rate_df)
+        total_frames = int(duration * fps)
         
-        if not cap.isOpened():
-            print(f"❌ Could not open video file: {input_video}")
-            return False
-        
-        # Get video properties
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
-        
-        print(f"\n📹 Video Information:")
-        print(f"   Resolution: {width}x{height}")
+        print(f"\n📹 Transparent Overlay Canvas:")
+        print(f"   Resolution: {width}x{height} (portrait)")
         print(f"   FPS: {fps:.2f}")
         print(f"   Total Frames: {total_frames}")
         print(f"   Duration: {duration:.2f}s ({duration/60:.2f} min)")
+        print(f"   Output Format: WebM with alpha (VP9)")
         
         print(f"\n💓 Heart Rate Data:")
         print(f"   Data points: {len(heart_rate_df)}")
@@ -461,28 +491,7 @@ def process_video(
         print(f"   Text: ({text_x}, {text_y}) font={font_size}px")
         print(f"   Stroke: {stroke_width}px")
         
-        # Setup video writer with H.264 codec for better quality/color preservation
-        # Try multiple codecs in order of preference
-        codecs = ['avc1', 'H264', 'X264', 'mp4v']
-        out = None
-        
-        for codec in codecs:
-            fourcc = cv2.VideoWriter_fourcc(*codec)
-            out = cv2.VideoWriter(str(output_video), fourcc, fps, (width, height))
-            if out.isOpened():
-                print(f"\n✅ Using codec: {codec}")
-                break
-            else:
-                out.release()
-        
-        if out is None or not out.isOpened():
-            # Fallback to default
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(str(output_video), fourcc, fps, (width, height))
-        
-        if not out.isOpened():
-            print(f"❌ Could not create output video file: {output_video}")
-            return False
+        temp_frames_dir = Path(tempfile.mkdtemp(prefix="overlay_frames_"))
         
         print(f"\n⚙️  Processing Settings:")
         print(f"   Style: React Native Layout (Heart Icon + BPM Text + Chart)")
@@ -492,21 +501,12 @@ def process_video(
         print(f"   Output: {output_video}")
         print()
         
-        frame_count = 0
-        
-        # Calculate chart dimensions (top 25% of screen)
         chart_height = int(height * 0.25)
         chart_width = width
         
-        # Process each frame with progress bar
         with tqdm(total=total_frames, desc="Rendering", unit="frames", ncols=80) as pbar:
-            while True:
-                ret, frame = cap.read()
-                
-                if not ret:
-                    break
-                
-                # Calculate current time in seconds
+            for frame_count in range(total_frames):
+                frame = np.zeros((height, width, 4), dtype=np.uint8)
                 current_time = frame_count / fps
                 
                 # Get heart rate for current time
@@ -547,31 +547,31 @@ def process_video(
                 # Overlay text (also convert RGB to BGR for PIL-generated text)
                 frame = overlay_image_alpha(frame, text_img, text_x, text_y, convert_rgb_to_bgr=True)
                 
-                # Create and overlay heart rate chart at top of screen
-                chart_img = create_heart_rate_chart(
-                    heart_rate_df,
-                    current_time,
-                    chart_width,
-                    chart_height,
-                    duration
-                )
+                # Create and overlay heart rate chart at top of screen (optional, slow)
+                if include_chart:
+                    chart_img = create_heart_rate_chart(
+                        heart_rate_df,
+                        current_time,
+                        chart_width,
+                        chart_height,
+                        duration
+                    )
+                    if chart_img.size > 0:
+                        frame = overlay_image_alpha(frame, chart_img, 0, 0, convert_rgb_to_bgr=True)
                 
-                # Overlay chart at top of frame
-                if chart_img.size > 0:
-                    frame = overlay_image_alpha(frame, chart_img, 0, 0, convert_rgb_to_bgr=True)
-                
-                # Write frame
-                out.write(frame)
-                
-                frame_count += 1
+                frame_path = temp_frames_dir / f"frame_{frame_count:05d}.png"
+                cv2.imwrite(str(frame_path), frame)
                 pbar.update(1)
         
-        # Cleanup
-        cap.release()
-        out.release()
+        print(f"\n🎬 Encoding transparent WebM video...")
+        if not encode_transparent_video(temp_frames_dir, output_video, fps):
+            shutil.rmtree(temp_frames_dir, ignore_errors=True)
+            return False
+        
+        shutil.rmtree(temp_frames_dir, ignore_errors=True)
         
         print(f"\n✅ Processing complete!")
-        print(f"   Processed {frame_count} frames")
+        print(f"   Processed {total_frames} frames")
         print(f"   Output saved to: {output_video}")
         
         return True
@@ -592,29 +592,50 @@ def main():
         epilog="""
 Examples:
   python src/overlay_video.py
-  python src/overlay_video.py --input input/myvideo.mp4 --output output/result.mp4
+  python src/overlay_video.py --output output/overlay.webm
   python src/overlay_video.py --csv input/mydata.csv
 
 Design Specifications:
-  Reference dimensions: 1261x2242 pixels (portrait 9:16)
+  Transparent canvas: 1080x1920 pixels (portrait 9:16)
   Heart icon: 21.1% from left, 75.5% from top, 15.7% width
   Text: Poppins-Bold, 9.5% width, white with black stroke
   Animation: ±15% pulse synced to actual BPM
+  Output: WebM with alpha for compositing over other videos
         """
-    )
-    
-    parser.add_argument(
-        '--input', '-i',
-        type=str,
-        default='input/video.mp4',
-        help='Input video file (default: input/video.mp4)'
     )
     
     parser.add_argument(
         '--output', '-o',
         type=str,
-        default='output/video_with_hr.mp4',
-        help='Output video file (default: output/video_with_hr.mp4)'
+        default='output/transparent_overlay.webm',
+        help='Output video file (default: output/transparent_overlay.webm)'
+    )
+    
+    parser.add_argument(
+        '--fps',
+        type=float,
+        default=30.0,
+        help='Frames per second (default: 30)'
+    )
+    
+    parser.add_argument(
+        '--width',
+        type=int,
+        default=1080,
+        help='Canvas width in pixels (default: 1080)'
+    )
+    
+    parser.add_argument(
+        '--height',
+        type=int,
+        default=1920,
+        help='Canvas height in pixels (default: 1920)'
+    )
+    
+    parser.add_argument(
+        '--no-chart',
+        action='store_true',
+        help='Skip heart rate chart (faster, for testing)'
     )
     
     parser.add_argument(
@@ -627,24 +648,18 @@ Design Specifications:
     args = parser.parse_args()
     
     print("=" * 60)
-    print("🎨 PROFESSIONAL VIDEO OVERLAY SYSTEM")
-    print("   Heart Rate Display - Exact Design Match")
+    print("🎨 TRANSPARENT OVERLAY VIDEO SYSTEM")
+    print("   Heart Rate Display - 1080x1920 Canvas")
     print("=" * 60)
     
     # Define paths
     project_root = Path(__file__).parent.parent
-    input_video = Path(args.input)
     output_video = Path(args.output)
     csv_file = Path(args.csv)
     font_path = project_root / "assets" / "fonts" / "Poppins-Bold.ttf"
     heart_icon_path = project_root / "assets" / "images" / "heart.png"
     
     # Check input files
-    if not input_video.exists():
-        print(f"\n❌ Input video not found: {input_video}")
-        print(f"   Please add your video to: {input_video}")
-        return 1
-    
     if not csv_file.exists():
         print(f"\n❌ CSV file not found: {csv_file}")
         print(f"   Please add your heart rate data to: {csv_file}")
@@ -684,20 +699,24 @@ Design Specifications:
     # Create output directory
     output_video.parent.mkdir(parents=True, exist_ok=True)
     
-    # Process video
+    # Process video (transparent canvas, no input video)
     success = process_video(
-        input_video,
         output_video,
         df,
         font_path,
-        heart_icon_path
+        heart_icon_path,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        include_chart=not args.no_chart
     )
     
     if success:
         print("\n" + "=" * 60)
         print("🎉 SUCCESS!")
         print("=" * 60)
-        print(f"\n📹 Your video is ready: {output_video}")
+        print(f"\n📹 Your transparent overlay is ready: {output_video}")
+        print(f"   Use this WebM file as an overlay layer in your video editor.")
         print()
         return 0
     else:
